@@ -10,7 +10,7 @@ Get-MovieRating -title "Memento"
 
 .NOTES
 #>
-function Get-MovieRating {
+function Get-MovieRatings {
 
     param (
         [String]$title
@@ -18,8 +18,13 @@ function Get-MovieRating {
 
     Write-Host "Getting primary information"
     $movie = Get-IMDbInformation $title
+    $movie.RT = Get-RTInformation $movie.Title $movie.Year
+    
+    Write-Host "Result:"
+    $movie
 
-
+    Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.RT)"
+    Write-Host "`ncopied to clipboard"
 }
 
 function Get-IMDbInformation {
@@ -41,17 +46,13 @@ function Get-IMDbInformation {
     # check for no results
     $elements = $response.ParsedHtml.getElementsByClassName('noresults')
     if ($elements.Length -gt 0) {
-        $result = @{}
-        $result.Data = "IMDb"
-        $result.Title = $title
-        $result.Rating = "No results found"
-        return $result
+        return "No results found"
     }
 
     # check results
     $elements = $response.ParsedHtml.getElementsByClassName('result_text')
     $results = New-Object "System.Collections.ArrayList"
-    Write-Host "`nResults:"
+    Write-Host "Results:"
     for ($i = 0; $i -lt $elements.Length; $i++) {
         $match = [regex]::Match($elements[$i].innerHTML, '(?i)^<a href="(\/title\/[^\/]+)\/[^"]*">([^<]+)<\/a>.+\(([0-9]{4})\)')
         if ($match.Success) {
@@ -112,7 +113,7 @@ function Get-RTInformation {
     param (
         [Parameter(Mandatory=$true)]
         [String]$title,
-        [Parameter(Mandatory=$false)]
+        [Parameter(Mandatory=$true)]
         [String]$year
     )
 
@@ -122,24 +123,58 @@ function Get-RTInformation {
     $encodedTitle = $encodedTitle -replace "&amp;", "%26"
 
     # search RT
-    $url = "http://www.rottentomatoes.com/search/?search=$encodedTitle"
-    $response = Invoke-WebRequest $url -UserAgent "Mozilla/5.0 (iPhone; CPU iPhone OS 10_3 like Mac OS X) AppleWebKit/602.1.50 (KHTML, like Gecko) CriOS/56.0.2924.75 Mobile/14E5239e Safari/602.1"
+    $url = "https://www.rottentomatoes.com/search/?search=$encodedTitle"
+    Write-Host "rt: searching $url" -ForegroundColor "DarkGray"
+    $response = Invoke-WebRequest $url
 
-    write-host $response
-
-
-    if ([regex]::Match($html, '(?i)noresults')) {
-        write-host "no results"
+    # check for results
+    $match = [regex]::Match($response, '(?i){.*"movies":(\[.*\]),"tvCount".*}')
+    if (-not $match.Success) {
+        Write-Host "rt: no results found" -ForegroundColor "DarkGray"
+        return "No results found"
     }
+    else {
+        $url = $null
+        $json = ConvertFrom-Json $match.Groups[1]
+        for ($i = 0; $i -lt $json.Length; $i++) {
+            $item = $json[$i]
+            $y = [convert]::ToInt32($item.year)
+            Write-Host "rt: checking against $($item.name) $($item.year)" -ForegroundColor "DarkGray"
+            if (($item.name.Contains($title) -or $title.Contains($item.name)) -and ($y -eq $year -or $y + 1 -eq $year)) {
+                Write-Host "rt: matched $($item.name) $($item.year)" -ForegroundColor "DarkGray"
+                $url = "https://www.rottentomatoes.com$($json[$i].url)"
+                break
+            }
+        }
+        if (-not $url) {
+            return "No results found"
+        }
 
-    # check for no results
-    $elements = $response.ParsedHtml.getElementsByClassName('noresults')
-    write-host $elements.Length
-    if ($elements.Length -gt 0) {
-        $result = @{}
-        $result.Data = "IMDb"
-        $result.Title = $title
-        $result.Rating = "No results found"
+        # get movie details
+        $response = Invoke-WebRequest $url
+        
+        # get critics rating
+        $criticsElement = $response.ParsedHtml.getElementsByClassName("meter critic-score");
+        if ($criticsElement) {
+            $meterElement = $criticsElement[0].getElementsByClassName("meter-value");
+            if ($meterElement) {
+                $criticsRating = $meterElement[0].childNodes[0].innerHTML
+            }
+        }
+        # get the users rating
+        $usersElement = $response.ParsedHtml.getElementsByClassName("meter media");
+        if ($usersElement) {
+            $meterElement = $usersElement[0].getElementsByClassName("meter-value");
+            if ($meterElement) {
+                $usersRating = $meterElement[0].childNodes[0].innerHTML -replace "%",""
+            }
+        }
+
+        $result = ""
+        if ($criticsRating) { $result += $criticsRating }
+        else { $result += "?" }
+        if ($criticsRating) { $result += "/$usersRating" }
+        else { $result += "/?" }
         return $result
     }
 }
