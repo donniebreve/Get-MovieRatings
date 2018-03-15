@@ -18,12 +18,12 @@ function Get-MovieRatings {
 
     Write-Host "Getting primary information"
     $movie = Get-IMDbInformation $title
-    $movie.RT = Get-RTInformation $title $movie.Year
+    $movie.RT = Get-RTInformation $movie.Title $movie.Year
     
     Write-Host "Result:"
     $movie
 
-    Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.RT)"
+    Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.RT[0])`t$($movie.RT[1])"
     Write-Host "`ncopied to clipboard"
 }
 
@@ -174,12 +174,7 @@ function Get-RTInformation {
             }
         }
 
-        $result = ""
-        if ($criticsRating) { $result += $criticsRating }
-        else { $result += "?" }
-        if ($criticsRating) { $result += "/$usersRating" }
-        else { $result += "/?" }
-        return $result
+        return @($criticsRating, $usersRating)
     }
 }
 
