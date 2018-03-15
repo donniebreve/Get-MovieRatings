@@ -16,15 +16,23 @@ function Get-MovieRatings {
         [String]$title
     )
 
-    Write-Host "Getting primary information"
+    # get imdb/mc information, we use this as the primary information because it is usualy more correct
     $movie = Get-IMDbInformation $title
+    # get rottentomatoes ratings
     $movie.RT = Get-RTInformation $movie.Title $movie.Year
     
-    Write-Host "Result:"
-    $movie
+    Write-Host "Movie"
+    Write-Host "---------------"
+    Write-Host "Title: $($movie.Title)"
+    Write-Host "Year:  $($movie.Year)"
+    Write-Host "Genre: $($movie.Genre)"
+    Write-Host "IMDb:  $($movie.IMDb)"
+    Write-Host "MC:    $($movie.MC)"
+    Write-Host "RT:    $($movie.RT)"
+    Write-Host
 
-    Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.RT[0])`t$($movie.RT[1])"
-    Write-Host "`ncopied to clipboard"
+    Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.MC)`t$($movie.RT[0])`t$($movie.RT[1])"
+    Write-Host "Copied to clipboard." -ForegroundColor "DarkGray"
 }
 
 function Get-IMDbInformation {
@@ -34,9 +42,10 @@ function Get-IMDbInformation {
         [String]$title
     )
 
+    Write-Host "Retrieving IMDb information..."
+
     # encode the title
-    $encodedTitle = $title
-    $encodedTitle = $encodedTitle -replace " ", "+"
+    $encodedTitle = $title -replace " ", "+"
     $encodedTitle = $encodedTitle -replace "&amp;", "%26"
 
     # search IMDb
@@ -58,12 +67,12 @@ function Get-IMDbInformation {
         $match = [regex]::Match($elements[$i].innerHTML, '(?i)^<a href="(\/title\/[^\/]+)\/[^"]*">([^<]+)<\/a>.+\(([0-9]{4})\)')
         if ($match.Success) {
             $result = @{}
-            $result.Url = $match.Groups[1].value
+            $result.Url = "http://www.imdb.com$($match.Groups[1].value)"
             $result.Title = $match.Groups[2].value
             $result.Year = $match.Groups[3].value
             [void]$results.Add($result)
-            Write-Host -NoNewline "$($i + 1): $($result.Title), $($result.Year)"
-            Write-Host " http://www.imdb.com$($result.Url)" -ForegroundColor "DarkGray"
+            Write-Host -NoNewline "$($i + 1): $($result.Title) ($($result.Year))"
+            Write-Host " [$($result.Url)]" -ForegroundColor "DarkGray"
         }
     }
     if ($results.Count -gt 1) {
@@ -75,18 +84,20 @@ function Get-IMDbInformation {
     }
 
     # get movie details
-    $response = Invoke-WebRequest "http://www.imdb.com$($result.Url)"
+    $response = Invoke-WebRequest $result.Url
     $html = [System.Net.WebUtility]::HtmlDecode($response.ParsedHtml.getElementsByClassName('title_bar_wrapper')[0].innerHTML)
+
+    $movie = @{}
 
     # get the title
     $match = [regex]::Match($html, '(?i)itemprop="name">([^<]+)')
     if ($match.Success) {
-        $title = $match.Groups[1].value.Trim()
+        $movie.Title = $match.Groups[1].value.Trim()
     }
     # get the year
     $match = [regex]::Match($html, '(?i)id=titleYear>\(<a href="\/year\/([0-9]+)\/')
     if ($match.Success) {
-        $year = $match.Groups[1].value.Trim()
+        $movie.Year = $match.Groups[1].value.Trim()
     }
     # get the genre
     $matches = [regex]::Matches($html, '(?i)itemprop="genre">([^<]+)')
@@ -96,17 +107,17 @@ function Get-IMDbInformation {
             else { $genre += ", $($matches.Groups[$i+1].value.Trim())" }
         }
     }
+    $movie.Genre = $genre
     # get the rating
     $match = [regex]::Match($html, '(?i)itemprop="ratingValue">([^<]+)')
     if ($match.Success) {
-        $rating = $match.Groups[1].value.Trim()
+        $movie.IMDb = [convert]::ToDecimal($match.Groups[1].value.Trim()) * 10
     }
+    # get the metacritic rating
+    $movie.MC = $response.ParsedHtml.getElementsByClassName('metacriticScore')[0].childNodes[0].innerHTML
 
-    $movie = @{}
-    $movie.Title = $title
-    $movie.Year = $year
-    $movie.Genre = $genre
-    $movie.IMDb = $rating
+    Write-Host
+
     return $movie
 }
 
@@ -119,9 +130,10 @@ function Get-RTInformation {
         [Int32]$year
     )
 
+    Write-Host "Retrieving Rottentomatoes information..."
+
     # encode the title
-    $encodedTitle = $title
-    $encodedTitle = $encodedTitle -replace " ", "+"
+    $encodedTitle = $title -replace " ", "+"
     $encodedTitle = $encodedTitle -replace "&amp;", "%26"
 
     # search RT
@@ -133,25 +145,41 @@ function Get-RTInformation {
     $match = [regex]::Match($response, '(?i){.*"movies":(\[.*\]),"tvCount".*}')
     if (-not $match.Success) {
         Write-Host "rt: no results found" -ForegroundColor "DarkGray"
-        return "No results found"
+        return "NA"
     }
     else {
         $url = $null
+        $results = New-Object "System.Collections.ArrayList"
         $json = ConvertFrom-Json $match.Groups[1]
         for ($i = 0; $i -lt $json.Length; $i++) {
-            $it = $json[$i].name
-            $iy = [convert]::ToInt32($json[$i].year)
-            $distance = LDCompare $title $it $true
-            Write-Host "rt: comparing $it $iy https://www.rottentomatoes.com$($json[$i].url)" -ForegroundColor "DarkGray"
-            write-host "rt: distance $distance, percent $([Double]$distance/$title.Length)" -ForegroundColor "DarkGray"
-            if (($distance/$title.Length -lt 0.2) -and ($iy -eq $year -or $iy -eq ($year + 1))) {
-                Write-Host "rt: matched $($item.name) $($item.year)" -ForegroundColor "DarkGray"
-                $url = "https://www.rottentomatoes.com$($json[$i].url)"
+            $item = @{}
+            $item.Title = $json[$i].name
+            $item.Year = [convert]::ToInt32($json[$i].year)
+            $item.Url = "https://www.rottentomatoes.com$($json[$i].url)"
+            $item.Distance = LDCompare $title $item.Title $true
+            [void]$results.Add($item)
+            Write-Host "rt: comparing $($item.Title) $($item.Year)" -ForegroundColor "DarkGray"
+            if (($item.distance/$title.Length -lt 0.2) -and ($item.year -eq $year -or $item.year -eq ($year + 1))) {
+                Write-Host "rt: matched" -ForegroundColor "DarkGray"
+                $url = $item.Url
                 break
             }
         }
         if (-not $url) {
-            return "No results found"
+            Write-Host "rt: not matched" -ForegroundColor "DarkGray"
+            Write-Host "Results:"
+            Write-Host "0: Skip"
+            for ($i = 0; $i -lt $results.Count; $i++) {
+                Write-Host -NoNewline "$($i + 1): $($results[$i].Title) ($($results[$i].Year))"
+                Write-Host " [$($results[$i].Url)]" -ForegroundColor "DarkGray"
+            }
+            $selection = Read-Host "Please select a movie"
+            if ($selection -eq 0) {
+                return "NA"
+            }
+            else {
+                $url = $results[$selection - 1].Url
+            }
         }
 
         # get movie details
@@ -173,6 +201,8 @@ function Get-RTInformation {
                 $usersRating = $meterElement[0].childNodes[0].innerHTML -replace "%",""
             }
         }
+        
+        Write-Host
 
         return @($criticsRating, $usersRating)
     }
