@@ -16,6 +16,8 @@ function Get-MovieRatings {
         [String]$title
     )
 
+    Write-Host
+
     # get imdb/mc information, we use this as the primary information because it is usualy more correct
     $movie = Get-IMDbInformation $title
     # get rottentomatoes ratings
@@ -46,7 +48,7 @@ function Get-IMDbInformation {
 
     # encode the title
     $encodedTitle = $title -replace " ", "+"
-    $encodedTitle = $encodedTitle -replace "&amp;", "%26"
+    $encodedTitle = $encodedTitle -replace "&", "%26"
 
     # search IMDb
     $url = "http://www.imdb.com/find?q=$encodedTitle&s=all"
@@ -114,7 +116,10 @@ function Get-IMDbInformation {
         $movie.IMDb = [convert]::ToDecimal($match.Groups[1].value.Trim()) * 10
     }
     # get the metacritic rating
-    $movie.MC = $response.ParsedHtml.getElementsByClassName('metacriticScore')[0].childNodes[0].innerHTML
+    $mcElements = $response.ParsedHtml.getElementsByClassName('metacriticScore')
+    if ($mcElements -and $mcElements.Length -gt 0) {
+        $movie.MC = $mcElements[0].childNodes[0].innerHTML
+    }
 
     Write-Host
 
@@ -134,7 +139,7 @@ function Get-RTInformation {
 
     # encode the title
     $encodedTitle = $title -replace " ", "+"
-    $encodedTitle = $encodedTitle -replace "&amp;", "%26"
+    $encodedTitle = $encodedTitle -replace "&", "%26"
 
     # search RT
     $url = "https://www.rottentomatoes.com/search/?search=$encodedTitle"
@@ -144,7 +149,7 @@ function Get-RTInformation {
     # check for results
     $match = [regex]::Match($response, '(?i){.*"movies":(\[.*\]),"tvCount".*}')
     if (-not $match.Success) {
-        Write-Host "rt: no results found" -ForegroundColor "DarkGray"
+        Write-Host "rt: no results found`n" -ForegroundColor "DarkGray"
         return "NA"
     }
     else {
@@ -175,6 +180,7 @@ function Get-RTInformation {
             }
             $selection = Read-Host "Please select a movie"
             if ($selection -eq 0) {
+                Write-Host
                 return "NA"
             }
             else {
@@ -187,17 +193,17 @@ function Get-RTInformation {
         
         # get critics rating
         $criticsElement = $response.ParsedHtml.getElementsByClassName("meter critic-score");
-        if ($criticsElement) {
+        if ($criticsElement -and $criticsElement.Length -gt 0) {
             $meterElement = $criticsElement[0].getElementsByClassName("meter-value");
-            if ($meterElement) {
+            if ($meterElement -and $meterElement.Length -gt 0) {
                 $criticsRating = $meterElement[0].childNodes[0].innerHTML
             }
         }
         # get the users rating
         $usersElement = $response.ParsedHtml.getElementsByClassName("meter media");
-        if ($usersElement) {
+        if ($usersElement -and $usersElement.Length -gt 0) {
             $meterElement = $usersElement[0].getElementsByClassName("meter-value");
-            if ($meterElement) {
+            if ($meterElement -and $meterElement.Length -gt 0) {
                 $usersRating = $meterElement[0].childNodes[0].innerHTML -replace "%",""
             }
         }
