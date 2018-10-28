@@ -16,25 +16,30 @@ function Get-MovieRatings {
         [String]$title
     )
 
-    Write-Host
+    while ($true) {
+        Write-Host
 
-    # get imdb/mc information, we use this as the primary information because it is usualy more correct
-    $movie = Get-IMDbInformation $title
-    # get rottentomatoes ratings
-    $movie.RT = Get-RTInformation $movie.Title $movie.Year
-    
-    Write-Host "Movie"
-    Write-Host "---------------"
-    Write-Host "Title: $($movie.Title)"
-    Write-Host "Year:  $($movie.Year)"
-    Write-Host "Genre: $($movie.Genre)"
-    Write-Host "IMDb:  $($movie.IMDb)"
-    Write-Host "MC:    $($movie.MC)"
-    Write-Host "RT:    $($movie.RT)"
-    Write-Host
+        # get imdb/mc information, we use this as the primary information because it is usualy more correct
+        $movie = Get-IMDbInformation $title
+        # get rottentomatoes ratings
+        $movie.RT = Get-RTInformation $movie.Title $movie.Year
+        
+        Write-Host "Movie"
+        Write-Host "---------------"
+        Write-Host "Title: $($movie.Title)"
+        Write-Host "Year:  $($movie.Year)"
+        Write-Host "Genre: $($movie.Genre)"
+        Write-Host "IMDb:  $($movie.IMDb)"
+        Write-Host "MC:    $($movie.MC)"
+        Write-Host "RT:    $($movie.RT)"
+        Write-Host
 
-    Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.MC)`t$($movie.RT[0])`t$($movie.RT[1])"
-    Write-Host "Copied to clipboard." -ForegroundColor "DarkGray"
+        Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.MC)`t$($movie.RT[0])`t$($movie.RT[1])"
+        Write-Host "Copied to clipboard." -ForegroundColor "DarkGray"
+
+        $title = Read-Host "Title (or exit)"
+        if ($title -eq "exit") { return }
+    }
 }
 
 function Get-IMDbInformation {
@@ -58,7 +63,8 @@ function Get-IMDbInformation {
     # check for no results
     $elements = $response.ParsedHtml.getElementsByClassName('noresults')
     if ($elements.Length -gt 0) {
-        return "No results found"
+        Write-Error "No results found"
+        return
     }
 
     # check results
@@ -73,7 +79,7 @@ function Get-IMDbInformation {
             $result.Title = $match.Groups[2].value
             $result.Year = $match.Groups[3].value
             [void]$results.Add($result)
-            Write-Host -NoNewline "$($i + 1): $($result.Title) ($($result.Year))"
+            Write-Host -NoNewline "$($results.Count): $($result.Title) ($($result.Year))"
             Write-Host " [$($result.Url)]" -ForegroundColor "DarkGray"
         }
     }
@@ -91,29 +97,45 @@ function Get-IMDbInformation {
 
     $movie = @{}
 
-    # get the title
-    $match = [regex]::Match($html, '(?i)itemprop="name">([^<]+)')
+    # get the title, (?i) is case insensitive mode
+    $match = [regex]::Match($html, '(?i)class=title_wrapper>\s*<[^>]*>([^<]+)')
     if ($match.Success) {
         $movie.Title = $match.Groups[1].value.Trim()
+    }
+    else {
+        Write-Error "Could not match title"
+        return
     }
     # get the year
     $match = [regex]::Match($html, '(?i)id=titleYear>\(<a href="\/year\/([0-9]+)\/')
     if ($match.Success) {
         $movie.Year = $match.Groups[1].value.Trim()
     }
+    else {
+        Write-Error "Could not match year"
+        return
+    }
     # get the genre
-    $matches = [regex]::Matches($html, '(?i)itemprop="genre">([^<]+)')
+    $matches = [regex]::Matches($html, '(?i)<a href="\/search\/title\?genres=[^>]+>([^<]+)')
     if ($matches.Success) {
         for ($i = 0; $i -lt $matches.Groups.Length; $i+=2) {
             if ($i -eq 0) { $genre = $matches.Groups[$i+1].value.Trim() }
             else { $genre += ", $($matches.Groups[$i+1].value.Trim())" }
         }
     }
+    else {
+        Write-Error "Could not match genres"
+        return
+    }
     $movie.Genre = $genre
     # get the rating
     $match = [regex]::Match($html, '(?i)itemprop="ratingValue">([^<]+)')
     if ($match.Success) {
         $movie.IMDb = [convert]::ToDecimal($match.Groups[1].value.Trim()) * 10
+    }
+    else {
+        Write-Error "Could not match rating"
+        return
     }
     # get the metacritic rating
     $mcElements = $response.ParsedHtml.getElementsByClassName('metacriticScore')
