@@ -17,13 +17,26 @@ function Get-MovieRatings {
     )
 
     while ($true) {
-        Write-Host
+        $movie = @{}
 
         # get imdb/mc information, we use this as the primary information because it is usualy more correct
-        $movie = Get-IMDbInformation $title
-        # get rottentomatoes ratings
-        $movie.RT = Get-RTInformation $movie.Title $movie.Year
+        $result = Get-DuckDuckGoLink "imdb" $title
+        if ($result) {
+            $info = Get-IMDbInformation $result.Url
+            $movie.Title = $info.Title
+            $movie.Year = $info.Year
+            $movie.Genre = $info.Genre
+            $movie.IMDb = $info.IMDb
+            $movie.MC = $info.MC
+        }
+
+        $result = Get-DuckDuckGoLink "rotten tomatoes" $title
+        if ($result) {
+            $info = Get-RottenTomatoesInformation $result.Url
+            $movie.RT = $info
+        }
         
+        Write-Host
         Write-Host "Movie"
         Write-Host "---------------"
         Write-Host "Title: $($movie.Title)"
@@ -32,7 +45,6 @@ function Get-MovieRatings {
         Write-Host "IMDb:  $($movie.IMDb)"
         Write-Host "MC:    $($movie.MC)"
         Write-Host "RT:    $($movie.RT)"
-        Write-Host
 
         Set-Clipboard -Value "$($movie.Title)`t$($movie.Year)`t$($movie.Genre)`t$($movie.IMDb)`t$($movie.MC)`t$($movie.RT[0])`t$($movie.RT[1])"
         Write-Host "Copied to clipboard." -ForegroundColor "DarkGray"
@@ -46,75 +58,60 @@ function Get-IMDbInformation {
 
     param (
         [Parameter(Mandatory=$true)]
-        [String]$title
+        [String]$url
     )
 
-    Write-Host "Retrieving IMDb information..."
-
-    # encode the title
-    $encodedTitle = $title -replace " ", "+"
-    $encodedTitle = $encodedTitle -replace "&", "%26"
-
-    # search IMDb
-    $url = "http://www.imdb.com/find?q=$encodedTitle&s=all"
-    write-host "imdb: $url" -ForegroundColor "DarkGray"
-    $response = Invoke-WebRequest $url -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:58.0) Gecko/20100101 Firefox/58.0"
-    
-    # check for no results
-    $elements = $response.ParsedHtml.getElementsByClassName('noresults')
-    if ($elements.Length -gt 0) {
-        Write-Error "No results found"
-        return
-    }
-
-    # check results
-    $elements = $response.ParsedHtml.getElementsByClassName('result_text')
-    $results = New-Object "System.Collections.ArrayList"
-    Write-Host "Results:"
-    for ($i = 0; $i -lt $elements.Length; $i++) {
-        $match = [regex]::Match($elements[$i].innerHTML, '(?i)^<a href="(\/title\/[^\/]+)\/[^"]*">([^<]+)<\/a>.+\(([0-9]{4})\)')
-        if ($match.Success) {
-            $result = @{}
-            $result.Url = "http://www.imdb.com$($match.Groups[1].value)"
-            $result.Title = $match.Groups[2].value
-            $result.Year = $match.Groups[3].value
-            [void]$results.Add($result)
-            Write-Host -NoNewline "$($results.Count): $($result.Title) ($($result.Year))"
-            Write-Host " [$($result.Url)]" -ForegroundColor "DarkGray"
-        }
-    }
-    if ($results.Count -gt 1) {
-        $selection = Read-Host "Please select a movie"
-        $result = $results[$selection - 1]
-    }
-    if ($results.Count -eq 1) {
-        $result = $results[0]
-    }
+    $info = @{}
 
     # get movie details
-    $response = Invoke-WebRequest $result.Url
-    $html = [System.Net.WebUtility]::HtmlDecode($response.ParsedHtml.getElementsByClassName('title_bar_wrapper')[0].innerHTML)
+    $html = Get-Html $url
 
-    $movie = @{}
-
-    # get the title, (?i) is case insensitive mode
-    $match = [regex]::Match($html, '(?i)class=title_wrapper>\s*<[^>]*>([^<]+)')
+    # get the rating
+    $match = [regex]::Match($html, '(?i)itemprop="ratingValue">([^<]+)')
     if ($match.Success) {
-        $movie.Title = $match.Groups[1].value.Trim()
+        $info.IMDb = [convert]::ToDecimal($match.Groups[1].value.Trim()) * 10
+    }
+    else {
+        Write-Error "Could not match imdb rating"
+    }
+
+    # get the metacritic rating
+    $match = [regex]::Match($html, '(?i)<div class="metacriticScore[^"]*">\s*<span>([0-9]+)<\/span>')
+    if ($match.Success) {
+        $info.MC = $match.Groups[1].value
+    }
+    else {
+        Write-Error "Could not match metacritic rating"
+    }
+
+    # capture the title_wrapper element, this prevents additional genres matching below the desired content
+    $match = [regex]::Match($html, '(?i)(<div class="title_wrapper">[\s\S]*)<\/div>\s*<\/div>\s*<\/div>\s*<\/div>\s*<\/div>\s*<div class="slate_wrapper">')
+    if ($match.Success) {
+        $html = $match.Groups[1].value
+    }
+    else {
+        Write-Error "imdb: failed to parse"
+        return
+    }
+    
+    # get the title, (?i) is case insensitive mode
+    $match = [regex]::Match($html, '(?i)class="title_wrapper">\s*<[^>]*>([^<]+)')
+    if ($match.Success) {
+        $info.Title = [System.Net.WebUtility]::HtmlDecode($match.Groups[1].value).Trim()
     }
     else {
         Write-Error "Could not match title"
-        return
     }
+
     # get the year
-    $match = [regex]::Match($html, '(?i)id=titleYear>\(<a href="\/year\/([0-9]+)\/')
+    $match = [regex]::Match($html, '(?i)id="titleYear">\(<a href="\/year\/([0-9]+)\/')
     if ($match.Success) {
-        $movie.Year = $match.Groups[1].value.Trim()
+        $info.Year = [System.Net.WebUtility]::HtmlDecode($match.Groups[1].value).Trim()
     }
     else {
         Write-Error "Could not match year"
-        return
     }
+
     # get the genre
     $matches = [regex]::Matches($html, '(?i)<a href="\/search\/title\?genres=[^>]+>([^<]+)')
     if ($matches.Success) {
@@ -125,115 +122,99 @@ function Get-IMDbInformation {
     }
     else {
         Write-Error "Could not match genres"
-        return
     }
-    $movie.Genre = $genre
-    # get the rating
-    $match = [regex]::Match($html, '(?i)itemprop="ratingValue">([^<]+)')
-    if ($match.Success) {
-        $movie.IMDb = [convert]::ToDecimal($match.Groups[1].value.Trim()) * 10
-    }
-    else {
-        Write-Error "Could not match rating"
-        return
-    }
-    # get the metacritic rating
-    $mcElements = $response.ParsedHtml.getElementsByClassName('metacriticScore')
-    if ($mcElements -and $mcElements.Length -gt 0) {
-        $movie.MC = $mcElements[0].childNodes[0].innerHTML
-    }
-
-    Write-Host
-
-    return $movie
+    $info.Genre = $genre
+    
+    return $info
 }
 
-function Get-RTInformation {
+function Get-RottenTomatoesInformation {
 
     param (
         [Parameter(Mandatory=$true)]
-        [String]$title,
-        [Parameter(Mandatory=$true)]
-        [Int32]$year
+        [String]$url
     )
 
-    Write-Host "Retrieving Rottentomatoes information..."
+    $html = Get-Html $url
 
-    # encode the title
-    $encodedTitle = $title -replace " ", "+"
-    $encodedTitle = $encodedTitle -replace "&", "%26"
-
-    # search RT
-    $url = "https://www.rottentomatoes.com/search/?search=$encodedTitle"
-    Write-Host "rt: $url" -ForegroundColor "DarkGray"
-    $response = Invoke-WebRequest $url
-
-    # check for results
-    $match = [regex]::Match($response, '(?i){.*"movies":(\[.*\]),"tvCount".*}')
-    if (-not $match.Success) {
-        Write-Host "rt: no results found`n" -ForegroundColor "DarkGray"
-        return "NA"
+    # get ratings
+    #<a href="#contentReviews" class="unstyled articleLink mop-ratings-wrap__icon-link" id="tomato_meter_link">
+    #            <span class="mop-ratings-wrap__icon meter-tomato icon big medium-xs certified_fresh"></span>
+    #            <span class="mop-ratings-wrap__percentage">
+    #                83%
+    #            </span>
+    $regex = '(?i)' # case insensitive
+    $regex += '<a href="#([^"]+)"[^>]*>\s*' # critic/user identifier
+    $regex += '<span[^>]*><\/span>\s*' # unused span
+    $regex += '<span class="mop-ratings-wrap__percentage">\s*([0-9]+)%\s*<\/span>' # rating
+    $regex = [regex]$regex
+    $match = $regex.Match($html)
+    while ($match.Success) {
+        if ($match.Groups[1].value -eq "contentReviews") {
+            $criticsRating = $match.Groups[2].value.Trim()
+        }
+        if ($match.Groups[1].value -eq "audience_reviews") {
+            $usersRating = $match.Groups[2].value.Trim()
+        }
+        if ($criticsRating -and $usersRating) {
+            break
+        }
+        $match = $match.NextMatch()
     }
-    else {
-        $url = $null
-        $results = New-Object "System.Collections.ArrayList"
-        $json = ConvertFrom-Json $match.Groups[1]
-        for ($i = 0; $i -lt $json.Length; $i++) {
-            $item = @{}
-            $item.Title = $json[$i].name
-            $item.Year = [convert]::ToInt32($json[$i].year)
-            $item.Url = "https://www.rottentomatoes.com$($json[$i].url)"
-            $item.Distance = LDCompare $title $item.Title $true
-            [void]$results.Add($item)
-            Write-Host "rt: comparing $($item.Title) $($item.Year)" -ForegroundColor "DarkGray"
-            if (($item.distance/$title.Length -lt 0.2) -and ($item.year -eq $year -or $item.year -eq ($year + 1))) {
-                Write-Host "rt: matched" -ForegroundColor "DarkGray"
-                $url = $item.Url
-                break
-            }
-        }
-        if (-not $url) {
-            Write-Host "rt: not matched" -ForegroundColor "DarkGray"
-            Write-Host "Results:"
-            Write-Host "0: Skip"
-            for ($i = 0; $i -lt $results.Count; $i++) {
-                Write-Host -NoNewline "$($i + 1): $($results[$i].Title) ($($results[$i].Year))"
-                Write-Host " [$($results[$i].Url)]" -ForegroundColor "DarkGray"
-            }
-            $selection = Read-Host "Please select a movie"
-            if ($selection -eq 0) {
-                Write-Host
-                return "NA"
-            }
-            else {
-                $url = $results[$selection - 1].Url
-            }
-        }
 
-        # get movie details
-        $response = Invoke-WebRequest $url
-        
-        # get critics rating
-        $criticsElement = $response.ParsedHtml.getElementsByClassName("meter critic-score");
-        if ($criticsElement -and $criticsElement.Length -gt 0) {
-            $meterElement = $criticsElement[0].getElementsByClassName("meter-value");
-            if ($meterElement -and $meterElement.Length -gt 0) {
-                $criticsRating = $meterElement[0].childNodes[0].innerHTML
-            }
-        }
-        # get the users rating
-        $usersElement = $response.ParsedHtml.getElementsByClassName("meter media");
-        if ($usersElement -and $usersElement.Length -gt 0) {
-            $meterElement = $usersElement[0].getElementsByClassName("meter-value");
-            if ($meterElement -and $meterElement.Length -gt 0) {
-                $usersRating = $meterElement[0].childNodes[0].innerHTML -replace "%",""
-            }
-        }
-        
-        Write-Host
+    return @($criticsRating, $usersRating)
+}
 
-        return @($criticsRating, $usersRating)
+function Get-DuckDuckGoLink {
+    
+    param (
+        [Parameter(Mandatory=$true)]
+        [String]$website,
+        [Parameter(Mandatory=$true)]
+        [String]$title
+    )
+
+    # encode the query
+    $query = "$website $title"
+    $query = $query -replace " ", "+"
+    $query = $query -replace "&", "%26"
+
+    # send the request
+    $html = Get-Html "https://duckduckgo.com/html?q=$query"
+
+    # check results
+    $regex = '(?i)' # case insensitive
+    $regex += '<a rel="nofollow" class="result__a" href="([^"]+)">' # link to website
+    $regex += '<b>([^<]+)</b>' # title
+    $regex += '\s*\(([0-9]+)\)' # year
+    $regex = [regex]$regex
+    $match = $regex.Match($html)
+    while ($match.Success -and $results.Length -lt 5) {
+        $result = @{}
+        $result.Url = $match.Groups[1].value
+        $result.Title = $match.Groups[2].value.Trim()
+        $result.Year = $match.Groups[3].value.Trim()
+        $result.Distance = LDCompare $title $result.Title $true
+        if ($result.Distance/$title.Length -lt 0.2) {
+            return $result
+        }
+        $match = $match.NextMatch()
     }
+}
+
+function Get-Html {
+
+    param (
+        [Parameter(Mandatory=$true)]
+        [String]$url
+    )
+
+    # make the web request, do not use normal parsing, some webpages never finish
+    Write-Host "request: $url" -ForegroundColor "DarkGray"
+    $response = Invoke-WebRequest $url -UseBasicParsing -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:70.0) Gecko/20100101 Firefox/70.0"
+    # debugging
+    #  $response.Content | Out-File ./html.txt
+    return $response.Content
 }
 
 # https://www.codeproject.com/Tips/102192/Levenshtein-Distance-in-Windows-PowerShell
